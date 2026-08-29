@@ -1138,7 +1138,39 @@ async def startup():
         limits=limits, timeout=timeout, follow_redirects=True,
     )
     await load_state()
-    # Auto-create default inbound if none exist
+        # Xray must exist before REALITY/ML-DSA keys are generated.
+    await _ensure_xray()
+
+    # Repair invalid ML-DSA seeds persisted by older startup code.
+    for _ib in INBOUNDS.values():
+        _proto = (_ib.get("protocol") or "").lower()
+        _sec = (_ib.get("security") or "").lower()
+
+        if _proto != "reality" and _sec != "reality":
+            continue
+
+        _rs = _ib.setdefault("reality_settings", {})
+        _seed = str(_rs.get("mldsa65_seed") or "").strip()
+
+        _seed_valid = False
+        if _seed:
+            try:
+                _raw_seed = base64.urlsafe_b64decode(
+                    _seed + "=" * (-len(_seed) % 4)
+                )
+                _seed_valid = len(_raw_seed) == 32
+            except Exception:
+                _seed_valid = False
+
+        if not _seed_valid:
+            _mk = _xray_gen_keypair("mldsa65")
+            if _mk.get("seed"):
+                _rs["mldsa65_seed"] = _mk["seed"]
+                _rs["mldsa65_verify"] = _mk.get("verify", "")
+                logger.info(
+                    "Repaired REALITY ML-DSA-65 keys for inbound %s",
+                    _ib.get("name", "unknown"),
+                )
     async with INBOUNDS_LOCK:
         if not INBOUNDS:
             INBOUNDS["default"] = {
